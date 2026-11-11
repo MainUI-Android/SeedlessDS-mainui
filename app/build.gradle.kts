@@ -17,10 +17,12 @@ android {
 
     defaultConfig {
         applicationId = "com.seedlessds.app"
+        // MainUI-Android build: installs beside the official app (CI sets the version).
+        applicationIdSuffix = ".mainui"
         minSdk = 21
         targetSdk = 35
-        versionCode = 111
-        versionName = "1.0.1"
+        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: 111
+        versionName = System.getenv("MAINUI_VERSION_NAME") ?: "1.0.1"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -71,7 +73,8 @@ android {
             buildConfigField("boolean", "FRAME_CONTROLS", (project.findProperty("frameControls") == "true").toString())
 
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // (MainUI-Android: the shared key without a release keystore; CI signs the APK itself.)
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null } ?: signingConfigs.getByName("shared")
         }
         debug {
             isMinifyEnabled = false

@@ -70,6 +70,45 @@ class EmulatorActivity : ComponentActivity() {
         setExternalInfoMode(if (appForeground) menuOpen || booting else null)
     }
 
+    // MainUI State API: MainUI (a frontend) saves and loads states directly. Its slots 0-9 are the
+    // menu's; its resume state is slot 99, which the menu doesn't show. Saves and loads go through
+    // the core like the menu's (the emulation thread carries them out).
+    private var mainUiStateInfo: SaveStateInfo? = null
+    private val mainUiStates = object : io.github.mainui.stateapi.MainUIStateApi.Emulator {
+        private fun n(slot: Int) = if (slot == io.github.mainui.stateapi.MainUIStateApi.RESUME_SLOT) 99 else slot
+        override fun isRunning() = inited && !booting && !isClosing
+        override fun isReady() = isRunning() && !menuOpen && appForeground && !bootHold
+        override fun slotCount() = 10
+        override fun save(slot: Int): String {
+            val info = mainUiStateInfo ?: throw IllegalStateException("no game is running")
+            val n = n(slot)
+            val before = info.date(n)
+            val ra = com.seedlessds.app.ra.RetroAchievements
+            reconSlot.set(n)
+            if (!SeedlessCore.stateSave(n, false)) throw IllegalStateException("SeedlessDS couldn't save the state")
+            val blob = ra.serializeProgress()
+            if (blob != null) { if (!info.writeSidecar(n, blob)) info.deleteSidecar(n) } else info.deleteSidecar(n)
+            // Written by the emulation thread: done once it's no longer saving and the file is new.
+            if (!io.github.mainui.stateapi.MainUIStateApi.await({ !SeedlessCore.stateSaving() && info.date(n) != before }, 30_000))
+                throw IllegalStateException("SeedlessDS didn't finish saving the state")
+            return "SeedlessDS slot $n"
+        }
+        override fun load(slot: Int) {
+            val info = mainUiStateInfo ?: throw IllegalStateException("no game is running")
+            val n = n(slot)
+            if (!info.exists(n)) throw IllegalStateException("slot $slot is empty")
+            val ra = com.seedlessds.app.ra.RetroAchievements
+            ra.beginStateLoad()
+            reconSlot.set(n)
+            val ok = try { SeedlessCore.stateLoad(n) } catch (t: Throwable) { ra.endStateLoad(); throw t }
+            if (!ok) { ra.endStateLoad(); throw IllegalStateException("SeedlessDS couldn't load the state") }
+            ra.deserializeProgress(info.readSidecar(n))
+            // (Carried out by the emulation thread at its next frame.)
+            Thread.sleep(300)
+        }
+        override fun slotTime(slot: Int) = mainUiStateInfo?.date(n(slot)) ?: 0L
+    }
+
     private fun refreshPauseState() {
         if (isClosing || !inited) return
         val pause = menuOpen || !appForeground || bootHold
@@ -132,6 +171,8 @@ class EmulatorActivity : ComponentActivity() {
         KeyMap.load(this)
         ControlLayout.load(this)
         val stateInfo = SaveStateInfo(this, userSub, gameBase, romUri, romPath)
+        mainUiStateInfo = stateInfo
+        io.github.mainui.stateapi.MainUIStateApi.attach(mainUiStates)
         reconSlot.set(0)
         if (com.seedlessds.app.Recon.available) {
             com.seedlessds.app.Recon.rom("open", displayName)
@@ -587,6 +628,7 @@ class EmulatorActivity : ComponentActivity() {
 
     override fun onDestroy() {
         com.seedlessds.app.AppLog.i(TAG, "onDestroy")
+        io.github.mainui.stateapi.MainUIStateApi.detach(mainUiStates)
         super.onDestroy()
         if (!closed) closeEmulation()
     }
