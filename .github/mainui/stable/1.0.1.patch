@@ -58,10 +58,18 @@ index 6408889..a341f4f 100644
              android:name=".control.ReleaseCommandReceiver"
              android:exported="true"
 diff --git a/app/src/main/java/com/seedlessds/app/emu/EmulatorActivity.kt b/app/src/main/java/com/seedlessds/app/emu/EmulatorActivity.kt
-index 44a07c9..f681343 100644
+index 44a07c9..f1cef67 100644
 --- a/app/src/main/java/com/seedlessds/app/emu/EmulatorActivity.kt
 +++ b/app/src/main/java/com/seedlessds/app/emu/EmulatorActivity.kt
-@@ -65,8 +65,53 @@ class EmulatorActivity : ComponentActivity() {
+@@ -2,6 +2,7 @@ package com.seedlessds.app.emu
+ 
+ import com.seedlessds.app.R as AppR
+ import com.seedlessds.core.SeedlessCore
++import io.github.mainui.stateapi.MainUIStateApi
+ 
+ import android.app.NotificationChannel
+ import android.app.NotificationManager
+@@ -65,8 +66,53 @@ class EmulatorActivity : ComponentActivity() {
          setExternalInfoMode(menuOpen || booting)
      }
  
@@ -70,8 +78,8 @@ index 44a07c9..f681343 100644
 +    // the core like the menu's (the emulation thread carries them out).
 +    private var mainUiStateInfo: SaveStateInfo? = null
 +    @Volatile private var mainUiPaused = false
-+    private val mainUiStates = object : io.github.mainui.stateapi.MainUIStateApi.Emulator {
-+        private fun n(slot: Int) = if (slot == io.github.mainui.stateapi.MainUIStateApi.RESUME_SLOT) 99 else slot
++    private val mainUiStates = object : MainUIStateApi.Emulator {
++        private fun n(slot: Int) = if (slot == MainUIStateApi.RESUME_SLOT) 99 else slot
 +        override fun isRunning() = inited && !booting && !isFinishing
 +        override fun isReady() = isRunning() && !menuOpen && appForeground && !bootHold && !mainUiPaused
 +        override fun slotCount() = 10
@@ -90,7 +98,7 @@ index 44a07c9..f681343 100644
 +            val blob = ra.serializeProgress()
 +            if (blob != null) { if (!info.writeSidecar(n, blob)) info.deleteSidecar(n) } else info.deleteSidecar(n)
 +            // Written by the emulation thread: done once it's no longer saving and the file is new.
-+            if (!io.github.mainui.stateapi.MainUIStateApi.await({ !SeedlessCore.stateSaving() && info.date(n) != before }, 30_000))
++            if (!MainUIStateApi.await({ !SeedlessCore.stateSaving() && info.date(n) != before }, 30_000))
 +                throw IllegalStateException("SeedlessDS didn't finish saving the state")
 +            return "SeedlessDS slot $n"
 +        }
@@ -116,20 +124,20 @@ index 44a07c9..f681343 100644
          RuntimeControl.lifecyclePaused = pause
          try { SeedlessCore.pause(if (pause) 1 else 0) } catch (_: Throwable) {}
      }
-@@ -117,6 +162,8 @@ class EmulatorActivity : ComponentActivity() {
+@@ -117,6 +163,8 @@ class EmulatorActivity : ComponentActivity() {
          KeyMap.load(this)
          ControlLayout.load(this)
          val stateInfo = SaveStateInfo(this, userSub, gameBase, romUri, romPath)
 +        mainUiStateInfo = stateInfo
-+        io.github.mainui.stateapi.MainUIStateApi.attach(mainUiStates)
++        MainUIStateApi.attach(mainUiStates)
          reconSlot.set(0)
          if (com.seedlessds.app.Recon.available) {
              com.seedlessds.app.Recon.rom("open", displayName)
-@@ -541,6 +588,7 @@ class EmulatorActivity : ComponentActivity() {
+@@ -541,6 +589,7 @@ class EmulatorActivity : ComponentActivity() {
          com.seedlessds.app.ra.RetroAchievements.unloadGame()
          cancelResumeNotification()
          extDisplay?.stop()
-+        io.github.mainui.stateapi.MainUIStateApi.detach(mainUiStates)
++        MainUIStateApi.detach(mainUiStates)
          try { SeedlessCore.quit(); emuThread?.join(2000); SeedlessCore.release() } catch (_: Throwable) {}
          RuntimeControl.detach(this)
          inited = false
