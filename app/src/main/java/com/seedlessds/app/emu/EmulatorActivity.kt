@@ -74,11 +74,17 @@ class EmulatorActivity : ComponentActivity() {
     // menu's; its resume state is slot 99, which the menu doesn't show. Saves and loads go through
     // the core like the menu's (the emulation thread carries them out).
     private var mainUiStateInfo: SaveStateInfo? = null
+    @Volatile private var mainUiPaused = false
     private val mainUiStates = object : io.github.mainui.stateapi.MainUIStateApi.Emulator {
         private fun n(slot: Int) = if (slot == io.github.mainui.stateapi.MainUIStateApi.RESUME_SLOT) 99 else slot
         override fun isRunning() = inited && !booting && !isClosing
-        override fun isReady() = isRunning() && !menuOpen && appForeground && !bootHold
+        override fun isReady() = isRunning() && !menuOpen && appForeground && !bootHold && !mainUiPaused
         override fun slotCount() = 10
+        override fun pause(): Boolean {
+            runOnUiThread { mainUiPaused = true; refreshPauseState() }
+            return true
+        }
+        override fun resume() = runOnUiThread { mainUiPaused = false; refreshPauseState() }
         override fun save(slot: Int): String {
             val info = mainUiStateInfo ?: throw IllegalStateException("no game is running")
             val n = n(slot)
@@ -111,7 +117,7 @@ class EmulatorActivity : ComponentActivity() {
 
     private fun refreshPauseState() {
         if (isClosing || !inited) return
-        val pause = menuOpen || !appForeground || bootHold
+        val pause = menuOpen || !appForeground || bootHold || mainUiPaused
         RuntimeControl.lifecyclePaused = pause
         try { SeedlessCore.pause(if (pause) 1 else 0) } catch (_: Throwable) {}
     }
