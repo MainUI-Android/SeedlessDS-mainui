@@ -21,8 +21,8 @@ android {
         applicationIdSuffix = ".mainui"
         minSdk = 21
         targetSdk = 35
-        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: 111
-        versionName = System.getenv("MAINUI_VERSION_NAME") ?: "1.0.1"
+        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: 112
+        versionName = System.getenv("MAINUI_VERSION_NAME") ?: "1.0.2"
 
         ndk {
             abiFilters += "arm64-v8a"
