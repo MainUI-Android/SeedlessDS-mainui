@@ -707,4 +707,9 @@
     <string name="settings_alt_app_icon_summary">在主屏幕上使用微笑的西瓜图标。</string>
     <string name="settings_alt_app_icon_error">无法更改应用图标，请重试。</string>
     <string name="microphone_permission_settings">如需使用设备麦克风，请在 Android 的 SeedlessDS 应用权限设置中允许使用麦克风。</string>
+    <string name="presets_automatic_description">在内置双屏的掌机上，上方屏幕显示上屏，下方屏幕显示触摸屏。</string>
+    <string name="screen_gap">屏幕间距</string>
+    <string name="screen_gap_small">小</string>
+    <string name="screen_gap_large">大</string>
+    <string name="library_single_rom_save_location">要打开此文件并使用应用存储中的存档吗？如需使用 ROM 所在目录的存档，请取消并将该文件夹添加到游戏库。</string>
 </resources>

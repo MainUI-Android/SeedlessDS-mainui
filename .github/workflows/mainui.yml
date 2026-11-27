@@ -87,7 +87,7 @@ jobs:
       - name: Version
         run: bash .github/mainui/ci.sh version "${{ matrix.channel }}" "${{ needs.plan.outputs.tag }}"
       - name: Build
-        run: chmod +x gradlew && ./gradlew --no-daemon --stacktrace :app:assembleRelease
+        run: chmod +x gradlew && ./gradlew --no-daemon --stacktrace -PqaSigning=true :app:assembleRelease
       - name: Sign
         id: sign
         env:

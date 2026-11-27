@@ -12,7 +12,7 @@ val coreDir = (project.findProperty("coreDir") as String?)
 
 android {
     namespace = "com.seedlessds.app"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = "25.2.9519653"
 
     defaultConfig {
@@ -20,8 +20,8 @@ android {
         // MainUI-Android build: installs beside the official app (CI sets the version).
         applicationIdSuffix = ".mainui"
         minSdk = 21
-        targetSdk = 35
-        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: 113
+        targetSdk = 36
+        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: 114
         versionName = System.getenv("MAINUI_VERSION_NAME") ?: "1.0.3"
 
         ndk {
@@ -47,11 +47,23 @@ android {
 
 
 
+    val qaSigning = providers.gradleProperty("qaSigning").orNull == "true"
     signingConfigs {
+        val local = Properties()
+        val localFile = rootProject.file("local.properties")
+        if (localFile.isFile) localFile.inputStream().use { local.load(it) }
+
+        create("playUpload") {
+            fun uploadProperty(localKey: String, environmentKey: String): String? =
+                local.getProperty(localKey)?.takeIf(String::isNotBlank)
+                    ?: providers.environmentVariable(environmentKey).orNull
+
+            uploadProperty("PLAY_UPLOAD_KEYSTORE", "SEEDLESS_PLAY_UPLOAD_STORE")?.let { storeFile = file(it) }
+            storePassword = uploadProperty("PLAY_UPLOAD_STORE_PASSWORD", "SEEDLESS_PLAY_UPLOAD_STORE_PASSWORD")
+            keyAlias = uploadProperty("PLAY_UPLOAD_KEY_ALIAS", "SEEDLESS_PLAY_UPLOAD_ALIAS")
+            keyPassword = uploadProperty("PLAY_UPLOAD_KEY_PASSWORD", "SEEDLESS_PLAY_UPLOAD_KEY_PASSWORD")
+        }
         create("release") {
-            val local = Properties()
-            val localFile = rootProject.file("local.properties")
-            if (localFile.isFile) localFile.inputStream().use { local.load(it) }
             local.getProperty("MELONDS_KEYSTORE")?.let { storeFile = file(it) }
             storePassword = local.getProperty("MELONDS_KEYSTORE_PASSWORD") ?: ""
             keyAlias = local.getProperty("MELONDS_KEY_ALIAS") ?: ""
@@ -74,8 +86,13 @@ android {
             buildConfigField("boolean", "FRAME_CONTROLS", (project.findProperty("frameControls") == "true").toString())
 
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // (MainUI-Android: the shared key without a release keystore; CI signs the APK itself.)
-            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null } ?: signingConfigs.getByName("shared")
+            signingConfig = signingConfigs.getByName(if (qaSigning) "shared" else "release")
+        }
+        create("playStore") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".playstore"
+            signingConfig = signingConfigs.getByName(if (qaSigning) "shared" else "playUpload")
+            matchingFallbacks += "release"
         }
         debug {
             isMinifyEnabled = false
@@ -100,9 +117,16 @@ android {
     }
 }
 
+androidComponents {
+    beforeVariants(selector().withBuildType("playStore")) {
+        it.minSdk = 24
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.window:window:1.4.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.annotation:annotation:1.8.2")
     implementation("com.google.android.material:material:1.12.0")

@@ -80,7 +80,9 @@ object RomLibrary {
     private fun isCartridgeImage(name: String): Boolean =
         name.endsWith(".nds", true) || name.endsWith(".srl", true)
 
-    fun scan(ctx: Context): List<RomEntry> {
+    fun scan(ctx: Context): List<RomEntry> = scan(ctx, folders(ctx))
+
+    internal fun scan(ctx: Context, roots: List<Uri>): List<RomEntry> {
         val t0 = android.os.SystemClock.elapsedRealtime()
         val out = ArrayList<RomEntry>()
         val cols = arrayOf(
@@ -90,7 +92,7 @@ object RomLibrary {
             DocumentsContract.Document.COLUMN_SIZE,
             DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         )
-        for (t in folders(ctx)) {
+        for (t in roots) {
             val children = runCatching {
                 DocumentsContract.buildChildDocumentsUriUsingTree(t, DocumentsContract.getTreeDocumentId(t))
             }.getOrNull() ?: continue
@@ -109,29 +111,29 @@ object RomLibrary {
             }
         }
         val result = out.distinctBy { it.uri }.sortedBy { it.name.lowercase() }
-        com.seedlessds.app.AppLog.i("library", "scan: ${folders(ctx).size} folders, ${result.size} games, ${android.os.SystemClock.elapsedRealtime() - t0} ms")
+        com.seedlessds.app.AppLog.i("library", "scan: ${roots.size} folders, ${result.size} games, ${android.os.SystemClock.elapsedRealtime() - t0} ms")
         return result
     }
 
-    fun browse(
+    internal suspend fun browse(
         ctx: Context,
         games: List<RomEntry>,
         filter: Filter,
         folder: Uri?,
         sorting: Sorting,
         descending: Boolean,
+        matchesName: (RomEntry) -> Boolean,
+        partial: suspend (List<RomEntry>) -> Unit,
     ): List<RomEntry> {
         val favorites = favorites(ctx)
         val raGames = raGames(ctx)
-        var list = games.asSequence()
+        var list = games.asSequence().filter(matchesName)
         if (folder != null && filter == Filter.ALL) {
             list = list.filter { it.folder == folder }
         }
         list = when (filter) {
-            Filter.ALL -> list
+            Filter.ALL, Filter.DS, Filter.DSIWARE -> list
             Filter.FAVORITES -> list.filter { favorites.contains(it.uri.toString()) }
-            Filter.DS -> list.filter { platform(ctx, it) == Platform.DS }
-            Filter.DSIWARE -> list.filter { platform(ctx, it) == Platform.DSI }
             Filter.RETRO_ACHIEVEMENTS -> list.filter { raGames.contains(it.uri.toString()) }
         }
         val stats = allStats(ctx)
@@ -140,7 +142,12 @@ object RomLibrary {
             Sorting.RECENTLY_PLAYED -> list.sortedByDescending { stats[it.uri.toString()]?.lastPlayed ?: 0L }
             Sorting.MOST_PLAYED -> list.sortedByDescending { stats[it.uri.toString()]?.playTimeMs ?: 0L }
         }.toList()
-        return if (descending) sorted.reversed() else sorted
+        val ordered = if (descending) sorted.reversed() else sorted
+        return when (filter) {
+            Filter.DS -> RomPlatforms.filter(ctx, ordered, Platform.DS, partial)
+            Filter.DSIWARE -> RomPlatforms.filter(ctx, ordered, Platform.DSI, partial)
+            else -> ordered
+        }
     }
 
     fun favorites(ctx: Context): Set<String> =

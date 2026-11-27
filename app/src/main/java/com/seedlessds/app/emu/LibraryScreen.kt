@@ -14,6 +14,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -84,6 +86,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -95,6 +98,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LibraryScreen(
     refreshKey: Int,
@@ -146,18 +150,29 @@ fun LibraryScreen(
     var searchOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
 
-    var games by remember { mutableStateOf<List<RomLibrary.RomEntry>>(emptyList()) }
-    LaunchedEffect(allGames, browseTick, filter, sorting, descending, openFolder, query) {
+    val source = allGames
+    val activeFilter = filter
+    val activeSorting = sorting
+    val activeDescending = descending
+    val activeFolder = openFolder?.uri
+    val search = query
+    val browseKeys = arrayOf(source, browseTick, activeFilter, activeSorting, activeDescending, activeFolder, search)
+    var games by remember(*browseKeys) { mutableStateOf<List<RomLibrary.RomEntry>>(emptyList()) }
+    var browsing by remember(*browseKeys) { mutableStateOf(true) }
+    LaunchedEffect(*browseKeys) {
         games = withContext(Dispatchers.IO) {
-            val browsed = RomLibrary.browse(ctx, allGames, filter, openFolder?.uri, sorting, descending)
-            val needle = normalizeForSearch(query)
-            if (needle.isEmpty()) browsed else browsed.filter { normalizeForSearch(it.name).contains(needle) }
+            val needle = normalizeForSearch(search)
+            RomLibrary.browse(
+                ctx, source, activeFilter, activeFolder, activeSorting, activeDescending,
+                matchesName = { needle.isEmpty() || normalizeForSearch(it.name).contains(needle) },
+                partial = { entries -> withContext(Dispatchers.Main) { games = entries } },
+            )
         }
+        browsing = false
     }
     val favorites = remember(browseTick) { RomLibrary.favorites(ctx) }
     LaunchedEffect(Unit) {
         BoxArt.ensureIndex(ctx)
-        BoxArt.refreshIndexIfStale(ctx)
     }
     var highlighted by remember { mutableStateOf<RomLibrary.RomEntry?>(null) }
     if (foldersDialog) {
@@ -210,7 +225,7 @@ fun LibraryScreen(
         val icon = withContext(Dispatchers.IO) { RomLibrary.info(ctx, entry).icon }
         val coverUrl = BoxArt.resolveUrl(ctx, entry)
         val raIconUrl = BoxArt.raIconUrl(ctx, entry)
-        val platform = withContext(Dispatchers.IO) { RomLibrary.platform(ctx, entry) }
+        val platform = withContext(Dispatchers.IO) { RomPlatforms.get(ctx, entry) }
         val stats = RomLibrary.stats(ctx, entry.uri)
         val fav = RomLibrary.favorites(ctx).contains(entry.uri.toString())
         val ra = RomLibrary.hasAchievements(ctx, entry)
@@ -286,6 +301,23 @@ fun LibraryScreen(
         modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Horizontal)),
         containerColor = colors.bg,
         topBar = {
+            val compactHeader = LocalConfiguration.current.screenWidthDp < 600
+            val headerActions: @Composable () -> Unit = {
+                MultiplayerHeaderButton { onOpenMultiplayer(null) }
+                if (!compactHeader) Spacer(Modifier.width(4.dp))
+                SeedlessHeaderAction(Icons.Rounded.Search, uiContext.getString(R.string.library_search), { searchOpen = true })
+                ProfileChip(profile) { profileDialog = true }
+                if (!compactHeader) Spacer(Modifier.width(4.dp))
+                ViewModeToggle(viewMode) {
+                    viewMode = it
+                    RomLibrary.setViewMode(ctx, it)
+                }
+                if (!compactHeader) Spacer(Modifier.width(4.dp))
+                SeedlessHeaderAction(Icons.Rounded.VideogameAsset, uiContext.getString(R.string.library_open_rom), onOpenSingle)
+                SeedlessHeaderAction(Icons.Rounded.CreateNewFolder, uiContext.getString(R.string.library_add_folder), onAddFolder)
+                SeedlessHeaderAction(Icons.Rounded.FolderDelete, uiContext.getString(R.string.library_remove_folder), { foldersDialog = true })
+                SeedlessHeaderAction(Icons.Rounded.Settings, uiContext.getString(R.string.common_settings), onGlobalSettings)
+            }
             Column(Modifier.background(colors.bg).statusBarsPadding()) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -390,22 +422,14 @@ fun LibraryScreen(
                             modifier = Modifier.weight(1f),
                         )
                     }
-                    if (!searchOpen) {
-                        MultiplayerHeaderButton { onOpenMultiplayer(null) }
-                        Spacer(Modifier.width(4.dp))
-                        SeedlessHeaderAction(Icons.Rounded.Search, uiContext.getString(R.string.library_search), { searchOpen = true })
-                        ProfileChip(profile) { profileDialog = true }
-                    Spacer(Modifier.width(4.dp))
-                    ViewModeToggle(viewMode) {
-                        viewMode = it
-                        RomLibrary.setViewMode(ctx, it)
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    SeedlessHeaderAction(Icons.Rounded.VideogameAsset, uiContext.getString(R.string.library_open_rom), onOpenSingle)
-                    SeedlessHeaderAction(Icons.Rounded.CreateNewFolder, uiContext.getString(R.string.library_add_folder), onAddFolder)
-                    SeedlessHeaderAction(Icons.Rounded.FolderDelete, uiContext.getString(R.string.library_remove_folder), { foldersDialog = true })
-                    SeedlessHeaderAction(Icons.Rounded.Settings, uiContext.getString(R.string.common_settings), onGlobalSettings)
-                    }
+                    if (!searchOpen && !compactHeader) headerActions()
+                }
+                if (!searchOpen && compactHeader) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) { headerActions() }
                 }
                 TextButton(
                     onClick = onBootFirmware,
@@ -430,6 +454,8 @@ fun LibraryScreen(
         bottomBar = {
             GamepadHintsFooter(
                 modifier = Modifier.background(colors.bg).navigationBarsPadding(),
+                hintSpacing = if (LocalConfiguration.current.screenWidthDp < 600) 6.dp else 18.dp,
+                wrapHints = LocalConfiguration.current.screenWidthDp < 600,
                 hints = listOf(
                     GamepadHint(null, uiContext.getString(R.string.common_navigate)),
                     GamepadHint(uiContext.getString(R.string.button_a), uiContext.getString(R.string.common_play)),
@@ -446,6 +472,7 @@ fun LibraryScreen(
         }
 
         val gridState = rememberLazyGridState()
+        LaunchedEffect(filter) { gridState.scrollToItem(0) }
         val showAlphabet = sorting == RomLibrary.Sorting.ALPHABETICALLY && games.size > 12
         val alphabetIndex = remember(games) {
             linkedMapOf<Char, Int>().apply {
@@ -536,11 +563,17 @@ fun LibraryScreen(
                                 }
                             }
                         }
+                        val status = if (browsing) {
+                            uiContext.getString(R.string.common_loading)
+                        } else {
+                            uiContext.resources.getQuantityString(R.plurals.common_games, games.size, games.size)
+                        }
                         Text(
-                            text = uiContext.resources.getQuantityString(R.plurals.common_games, games.size, games.size),
+                            text = status,
                             color = colors.text3,
                             fontFamily = SeedlessMono,
                             fontSize = 10.5.sp,
+                            maxLines = 1,
                         )
                     }
                 }
@@ -565,7 +598,7 @@ fun LibraryScreen(
                         )
                     }
                 }
-                if (games.isEmpty()) {
+                if (games.isEmpty() && !browsing) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         Box(Modifier.fillMaxWidth().padding(32.dp), Alignment.Center) {
                             Text(
@@ -676,7 +709,7 @@ private data class GameArtState(
 private fun rememberGameArt(entry: RomLibrary.RomEntry): GameArtState {
     val ctx = LocalContext.current
     var state by remember(entry.uri) {
-        mutableStateOf(GameArtState(icon = RomLibrary.cachedIcon(entry.uri)?.asImageBitmap(), platform = RomLibrary.cachedPlatform(ctx, entry)))
+        mutableStateOf(GameArtState(icon = RomLibrary.cachedIcon(entry.uri)?.asImageBitmap(), platform = RomPlatforms.cached(ctx, entry)))
     }
     LaunchedEffect(entry.uri) {
         if (state.icon == null) {
@@ -684,7 +717,7 @@ private fun rememberGameArt(entry: RomLibrary.RomEntry): GameArtState {
             state = state.copy(icon = romIcon?.asImageBitmap())
         }
         if (state.platform == null) {
-            val p = withContext(Dispatchers.IO) { RomLibrary.platform(ctx, entry) }
+            val p = withContext(Dispatchers.IO) { RomPlatforms.get(ctx, entry) }
             state = state.copy(platform = p)
         }
         state = state.copy(raIconUrl = BoxArt.raIconUrl(ctx, entry))
@@ -843,7 +876,34 @@ private fun GameCard(
             ),
     ) {
         GameArt(entry.title, art.icon, Modifier.fillMaxSize(), showInitial = art.icon == null,
-            coverUrl = art.coverUrl, raIconUrl = art.raIconUrl, loading = art.resolving)
+            coverUrl = art.coverUrl, raIconUrl = art.raIconUrl, loading = art.resolving) { coverLoaded ->
+            if (coverLoaded) {
+                RomIconBadge(art.icon)
+            } else {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f))
+                            )
+                        )
+                        .padding(start = 8.dp, end = 8.dp, top = 22.dp, bottom = 7.dp),
+                ) {
+                    Text(
+                        text = entry.title,
+                        color = Color.White,
+                        fontFamily = Manrope,
+                        fontSize = 11.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.align(Alignment.TopStart).padding(7.dp),
@@ -872,31 +932,6 @@ private fun GameCard(
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 7.dp).size(13.dp),
             )
         }
-        if (art.coverUrl == null) {
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f))
-                        )
-                    )
-                    .padding(start = 8.dp, end = 8.dp, top = 22.dp, bottom = 7.dp),
-            ) {
-                Text(
-                    text = entry.title,
-                    color = Color.White,
-                    fontFamily = Manrope,
-                    fontSize = 11.sp,
-                    lineHeight = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        if (art.coverUrl != null) RomIconBadge(art.icon)
     }
 }
 

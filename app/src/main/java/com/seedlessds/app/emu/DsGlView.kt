@@ -31,6 +31,36 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
     val bottomScreenRect: FloatArray get() = renderer.bottomScreenRect
     val topScreenRect: FloatArray get() = renderer.topScreenRect
 
+    @Volatile private var editingScreens = false
+
+    internal fun showEditorGeometry(editing: Boolean, ready: () -> Unit) {
+        if (editingScreens == editing) return
+        editingScreens = editing
+        queueEvent {
+            renderer.reapplyDisplay()
+            post { ready() }
+        }
+    }
+
+    internal fun supportsScreenGap(cfg: DsSettings): Boolean =
+        foldSeam == null && !DualScreenPresets.singleScreen(cfg) && !ExternalSurface.attached && cfg.screenLayout != 1 &&
+            ControlLayout.topScale == 1f && ControlLayout.botScale == 1f &&
+            ControlLayout.topOffX == 0f && ControlLayout.topOffY == 0f &&
+            ControlLayout.botOffX == 0f && ControlLayout.botOffY == 0f
+
+    @Volatile private var foldSeam: FoldSeam? = null
+    internal fun setFoldSeam(seam: FoldSeam?) {
+        if (foldSeam == seam) return
+        foldSeam = seam
+        stylusInput.cancel()
+        queueEvent { renderer.refreshGeometry() }
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        stylusInput.cancel()
+    }
+
     fun applyDisplaySettings() = queueEvent { renderer.reapplyDisplay() }
 
     @Volatile private var performanceOverlay: SurfaceOverlayFrame? = null
@@ -494,6 +524,10 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
             return floatArrayOf(nx, ny, r[2] * sc, r[3] * sc)
         }
 
+        private fun screenGap(cfg: DsSettings): Float =
+            if (!editingScreens && SettingsRepo.screenGapDp > 0 && supportsScreenGap(cfg))
+                SettingsRepo.screenGapDp * resources.displayMetrics.density else 0f
+
         private fun rawRects(w: Int, h: Int, cfg: DsSettings): Pair<FloatArray, FloatArray?> {
             if (DualScreenPresets.singleScreen(cfg)) {
                 if (cfg.dualScreenPreset != DualScreenPresets.OFF) {
@@ -518,11 +552,13 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
                 val (sw, sh) = fitAspect(w.toFloat(), h.toFloat())
                 return floatArrayOf((w - sw) / 2f, (h - sh) / 2f, sw, sh) to null
             }
+            val gap = screenGap(cfg)
             return when (cfg.screenLayout) {
                 2 -> {
-                    val (sw, sh) = fitAspect(w.toFloat(), h / 2f)
+                    val space = gap.coerceAtMost((h - if (cfg.integerScale) 384f else 2f).coerceAtLeast(0f))
+                    val (sw, sh) = fitAspect(w.toFloat(), (h - space) / 2f)
                     val x = (w - sw) / 2f
-                    floatArrayOf(x, h / 2f - sh, sw, sh) to floatArrayOf(x, h / 2f, sw, sh)
+                    floatArrayOf(x, (h - space) / 2f - sh, sw, sh) to floatArrayOf(x, (h + space) / 2f, sw, sh)
                 }
                 1 -> {
                     val (bw, bh) = fitAspect(w * 0.72f, h.toFloat())
@@ -532,16 +568,31 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
                     top to bot
                 }
                 4 -> {
-                    val halfW = w / 2f
-                    floatArrayOf(0f, 0f, halfW, h.toFloat()) to floatArrayOf(halfW, 0f, halfW, h.toFloat())
+                    val space = gap.coerceAtMost((w - 2f).coerceAtLeast(0f))
+                    val halfW = (w - space) / 2f
+                    floatArrayOf(0f, 0f, halfW, h.toFloat()) to floatArrayOf(halfW + space, 0f, halfW, h.toFloat())
                 }
                 else -> {
                     val halfW = w / 2f
-                    val (sw, sh) = fitAspect(halfW, h.toFloat())
-                    val y = (h - sh) / 2f
-                    floatArrayOf((halfW - sw) / 2f, y, sw, sh) to floatArrayOf(halfW + (halfW - sw) / 2f, y, sw, sh)
+                    val (baseW, baseH) = fitAspect(halfW, h.toFloat())
+                    val originalSpace = halfW - baseW
+                    val extra = gap.coerceAtMost((w - originalSpace - if (cfg.integerScale) 512f else 2f).coerceAtLeast(0f))
+                    if (extra == 0f) {
+                        val x = originalSpace / 2f
+                        val y = (h - baseH) / 2f
+                        floatArrayOf(x, y, baseW, baseH) to floatArrayOf(halfW + x, y, baseW, baseH)
+                    } else {
+                        val innerEdge = halfW - (originalSpace + extra) / 2f
+                        val (sw, sh) = fitAspect(innerEdge, h.toFloat())
+                        val y = (h - sh) / 2f
+                        floatArrayOf(innerEdge - sw, y, sw, sh) to floatArrayOf(w - innerEdge, y, sw, sh)
+                    }
                 }
             }
+        }
+
+        fun refreshGeometry() {
+            if (viewW > 0 && viewH > 0) writeScreenGeometry(viewW, viewH)
         }
 
         private fun writeScreenGeometry(w: Int, h: Int) {
@@ -550,7 +601,15 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
             geoVersion = DualScreenPresets.version
             geoExternal = ExternalSurface.attached
             val geo = FloatArray(24)
-            val (rawTop, rawBot) = rawRects(w, h, cfg)
+            val seam = foldSeam?.takeIf { !geoExternal && it.end < (if (it.horizontal) h else w) }
+            val logicalPreset = !geoExternal && cfg.dualScreenPreset != DualScreenPresets.OFF &&
+                (seam != null || cfg.dualScreenPreset != DualScreenPresets.AUTOMATIC ||
+                    cfg.screenLayout == 0 || cfg.screenLayout == DualScreenPresets.LAYOUT_FULLSCREEN)
+            val (rawTop, rawBot) = when {
+                seam != null -> seam.lcdSlots(w, h, cfg)
+                logicalPreset -> FoldSeam.continuousSlots(w, h, resources.displayMetrics.density, screenGap(cfg), cfg)
+                else -> rawRects(w, h, cfg)
+            }
             val zero = floatArrayOf(0f, 0f, 0f, 0f)
             if (rawBot == null) {
                 val showingBottom = DualScreenPresets.singleBottom(cfg) != cfg.swapScreens
@@ -564,10 +623,13 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
                 if (showingBottom) { bottomScreenRect = r; topScreenRect = zero }
                 else { topScreenRect = r; bottomScreenRect = zero }
             } else {
-                val firstSlot = xform(rawTop, w, h, ControlLayout.topScale, ControlLayout.topOffX, ControlLayout.topOffY)
-                val secondSlot = xform(rawBot, w, h, ControlLayout.botScale, ControlLayout.botOffX, ControlLayout.botOffY)
-                val topRect = if (cfg.swapScreens) secondSlot else firstSlot
-                val botRect = if (cfg.swapScreens) firstSlot else secondSlot
+                val firstSlot = if (seam != null) rawTop else xform(rawTop, w, h, ControlLayout.topScale, ControlLayout.topOffX, ControlLayout.topOffY)
+                val secondSlot = if (seam != null) rawBot else xform(rawBot, w, h, ControlLayout.botScale, ControlLayout.botOffX, ControlLayout.botOffY)
+                val swap = if (logicalPreset)
+                    (cfg.dualScreenPreset == DualScreenPresets.INTERNAL_BOTTOM) != cfg.swapScreens
+                else cfg.swapScreens && seam?.horizontal != true
+                val topRect = if (swap) secondSlot else firstSlot
+                val botRect = if (swap) firstSlot else secondSlot
                 System.arraycopy(quadNdc(w, h, topRect), 0, geo, 0, 12)
                 System.arraycopy(quadNdc(w, h, botRect), 0, geo, 12, 12)
                 topPxW = topRect[2].toInt(); topPxH = topRect[3].toInt()
@@ -633,8 +695,8 @@ class DsGlView(context: Context, val lowLatency: Boolean) : SurfaceView(context)
 
         private fun displayKeyOf(cfg: DsSettings): String = listOf(
             viewW, viewH, cfg.displayFilter, cfg.hires3D, cfg.gl16bit, cfg.internalRes, cfg.integerScale, cfg.screenLayout,
-            cfg.singleScreen, cfg.singleBottom, cfg.swapScreens, cfg.dualScreenPreset, cfg.dsKeepRatio, cfg.dsIntFillW,
-            cfg.dsIntFillH, cfg.dsIntAlign, cfg.dsSameSize, cfg.extDisplayType, cfg.extDisplayScreen,
+            SettingsRepo.screenGapDp, editingScreens, cfg.singleScreen, cfg.singleBottom, cfg.swapScreens, cfg.dualScreenPreset, cfg.dsKeepRatio, cfg.dsIntFillW,
+            cfg.dsIntFillH, cfg.dsIntAlign, cfg.dsExtFillW, cfg.dsExtFillH, cfg.dsExtAlign, cfg.dsSameSize, cfg.extDisplayType, cfg.extDisplayScreen,
             ControlLayout.topScale, ControlLayout.topOffX, ControlLayout.topOffY,
             ControlLayout.botScale, ControlLayout.botOffX, ControlLayout.botOffY,
             DualScreenPresets.version, ExternalSurface.attached,

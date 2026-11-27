@@ -83,7 +83,7 @@
         <activity
             android:name=".emu.EmulatorActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize|density"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar">
             <intent-filter android:label="@string/app_name">
@@ -104,8 +104,23 @@
         </activity>
 
         <activity
+            android:name=".emu.GamePanelActivity"
+            android:taskAffinity="${applicationId}.game_panel"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
+        <activity
+            android:name=".emu.GameActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|smallestScreenSize|density"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
+
+        <activity
             android:name=".emu.MultiplayerActivity"
             android:exported="false"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
             android:theme="@style/Theme.Material3.DayNight.NoActionBar" />
 
@@ -143,7 +158,7 @@
             android:exported="false" />
 
         <activity-alias
-            android:name="com.seedlessds.app.LaunchGame"
+            android:name="${applicationId}.LaunchGame"
             android:targetActivity=".emu.EmulatorActivity"
             android:exported="true" />
 
