@@ -1,4 +1,4 @@
-MainUI patch 6a2ab6f5d81f
+MainUI patch b4bc30ac2348
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
 index ebbe05f..c79c7e9 100644
 --- a/app/build.gradle.kts
